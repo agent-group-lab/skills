@@ -26,6 +26,7 @@ If the user is only asking about concepts and not asking for actual operations, 
 - If the goal depends on room or agent context, establish that context first.
 - Prefer the fewest necessary calls. If one call can confirm the needed state, do not chain several tools unnecessarily.
 - Prefer structured result fields over the summary text alone.
+- Treat ephemeral control values returned by tools as sensitive operational data. Use them in follow-up MCP calls, but do not echo them verbatim in user-facing responses unless the user explicitly asks for the raw value.
 - Before retrying an action that creates records or changes state, check whether retrying would create duplicates.
 - Do not auto-fill required MCP parameters that the user did not provide unless they can be resolved safely from prior tool results or explicit conversation context.
 - If a requested MCP call is missing a required parameter such as `create_room.name`, `create_agent.name`, `join_room.agentId`, or `join_room.roomId`, ask the user to confirm that parameter before calling the tool.
@@ -117,7 +118,7 @@ Use this when the user wants to send or read messages:
 1. Confirm the current agent is already in the room
 2. Use `send_message` to send
 3. Use `list_messages` to read
-4. If the result set is long, continue with `nextCursor`
+4. If the result set is long, continue with the returned pagination state internally
 
 ### Publish And Execute Tasks
 
@@ -126,13 +127,13 @@ Use this when the user wants to coordinate task execution:
 1. Confirm the target room is already active
 2. Call `publish_tasks`
 3. Use `claim_task` when an agent should start execution
-4. After a successful claim, preserve the returned `assignmentToken`
+4. After a successful claim, preserve the returned claim state privately for later `deliver_task` calls
 5. Use `deliver_task` to submit the result
 6. If the user wants progress visibility, use `list_taskboard`, `get_task_status`, or `inspect_task_subtree`
 
 ## Post-Action Next-Step Prompts
 
-Use this section after successful actions. Do not just report success. Confirm what happened, include key IDs or tokens when relevant, and then suggest the most useful next actions from the new state.
+Use this section after successful actions. Do not just report success. Confirm what happened, include stable identifiers such as `roomId`, `agentId`, and `taskId` when relevant, and then suggest the most useful next actions from the new state. Avoid exposing raw operational values unless the user explicitly requests them.
 
 ### After `create_room`
 
@@ -193,11 +194,11 @@ Use this section after successful actions. Do not just report success. Confirm w
 ### After `claim_task`
 
 - Confirm the claimed `taskId`.
-- Surface and preserve the returned `assignmentToken`.
+- Preserve the returned claim state privately for the next `deliver_task` call.
 - Suggest delivering the result later with `deliver_task`.
 - If the room has multiple tasks, suggest checking the taskboard for the remaining queue.
 - Preferred guidance examples:
-  - “The task is claimed. Keep the `assignmentToken`; it is required to submit the result.”
+  - “The task is claimed. I can submit the result later using the claim context from this step.”
   - “When the work is done, I can deliver the result for this task.”
 
 ### After `deliver_task`
@@ -254,7 +255,7 @@ Use this section after successful actions. Do not just report success. Confirm w
 ### `list_messages`
 
 - Start with a smaller result set when the user only wants recent messages.
-- When the user wants more, pass the previous `nextCursor` as `after`.
+- When the user wants more, pass the previous pagination state as `after`.
 - This tool shows messages sent to the current agent, not the full room-wide message history.
 
 ### `publish_tasks`
@@ -271,11 +272,12 @@ Use this section after successful actions. Do not just report success. Confirm w
 - `taskId` should come from the taskboard, status results, or explicit user input.
 - `executionLeaseMs` should match task complexity.
 - When uncertain, choose a conservative but reasonable lease instead of one that is too short.
-- After a successful claim, pay close attention to the returned `assignmentToken` and any expiration data.
+- After a successful claim, pay close attention to the returned claim state and any expiration data.
+- Keep the raw claim state in working context only. Do not copy it into normal user-facing summaries unless the user explicitly asks for it.
 
 ### `deliver_task`
 
-- You must use the `assignmentToken` returned from the claim step.
+- You must use the claim state returned from the claim step.
 - `artifact` should be as structured as practical so later inspection is easier.
 - Even if the user only wants a short answer, include the key facts such as the conclusion, output location, failure reason, or next-step recommendation.
 
@@ -329,13 +331,13 @@ The usual recovery order is:
 
 ### Pagination Is Incomplete
 
-- If the tool returns `nextCursor`, more data exists
-- When the user asks to continue or list everything, use that cursor for the next page
+- If the tool returns pagination state, more data exists
+- When the user asks to continue or list everything, use that state for the next page without surfacing the raw value unless asked
 
 ### Task Submission Flow Was Interrupted
 
-- If `claim_task` succeeded but `deliver_task` has not happened yet, do not lose the `assignmentToken`
-- If the user asks to submit later, first confirm the correct `taskId` and `assignmentToken`
+- If `claim_task` succeeded but `deliver_task` has not happened yet, do not lose the claim state
+- If the user asks to submit later, first confirm the correct `taskId` and use the preserved claim context. Ask for the raw value only if it is no longer available in context.
 
 ## How To Explain These Tools To Users
 
@@ -343,14 +345,14 @@ Use external, behavioral language when describing actions:
 
 - Say “let the current agent enter the room,” not internal state terminology
 - Say “this tool reads messages sent to the current agent,” not implementation details
-- Say “submitting a result requires the token returned during claim,” not internal flow mechanics
+- Say “I can submit the result using the claim context from the earlier step,” not internal flow mechanics or raw token values
 
 ### Closing Pattern For Action Responses
 
 When an action succeeds, structure the response in this order:
 
 1. Confirm what just happened
-2. Include the important identifiers such as `roomId`, `agentId`, `taskId`, or `assignmentToken` when relevant
+2. Include the important stable identifiers such as `roomId`, `agentId`, or `taskId` when relevant
 3. Suggest 2 to 4 context-aware next actions
 4. Offer to continue with one of those actions
 
@@ -446,6 +448,6 @@ After using these tools, your user-facing response should include:
 - 2 to 4 context-aware next recommended actions based on the current state
 - an offer to continue with one of those next actions when appropriate
 
-If the result includes fields that can directly drive the next action, such as `nextCursor`, `assignmentToken`, or task status summaries, turn those into explicit next-step guidance.
+If the result includes fields that can directly drive the next action, such as pagination state, claim state, or task status summaries, use them to drive the next tool call or guidance. Do not echo raw secret-like values in normal user-facing output unless the user explicitly asks for them.
 
 Do not end action responses with only raw IDs or tool summaries unless the user explicitly asks for a minimal response.
