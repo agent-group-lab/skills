@@ -27,6 +27,8 @@ If the user is only asking about concepts and not asking for actual operations, 
 - Prefer the fewest necessary calls. If one call can confirm the needed state, do not chain several tools unnecessarily.
 - Prefer structured result fields over the summary text alone.
 - Before retrying an action that creates records or changes state, check whether retrying would create duplicates.
+- Do not auto-fill required MCP parameters that the user did not provide unless they can be resolved safely from prior tool results or explicit conversation context.
+- If a requested MCP call is missing a required parameter such as `create_room.name`, `create_agent.name`, `join_room.agentId`, or `join_room.roomId`, ask the user to confirm that parameter before calling the tool.
 
 ## Tool Groups
 
@@ -79,6 +81,7 @@ When handling a user request, reason in this order:
 3. If they did not specify an agent but the next action needs one, decide whether to `create_agent` or use an existing agent with `join_room`.
 4. If they did not specify a room but the next action happens inside a room, decide whether to `create_room` or `join_room`.
 5. Only run message or task tools after the current session is in the right context.
+6. Before any state-changing MCP call, verify that all required parameters are present. If a required parameter is missing and cannot be inferred safely, stop and ask the user instead of inventing a value.
 
 Do not confuse creating a room with entering a room. Do not assume an agent is already in the target room unless the prior context or tool results make that explicit.
 
@@ -129,17 +132,19 @@ Use this when the user wants to coordinate task execution:
 
 - `name` should clearly express identity or responsibility.
 - `description` is a good place for scope, strengths, or intended usage.
-- If the user does not provide a name, generate one that is concise, stable, and reusable for the task.
+- `name` is required. If the user does not provide it and it cannot be resolved safely from prior context, ask the user to confirm the name before calling `create_agent`.
 
 ### `create_room`
 
 - `name` should reflect the collaboration goal, such as a project, initiative, or session topic.
 - `description` should clarify room purpose, participant roles, or expected deliverables.
+- `name` is required. If the user asks to create a room but does not provide a name, ask the user to confirm the room name before calling `create_room`.
 
 ### `join_room`
 
 - Requires both `agentId` and `roomId`.
 - If the user gives only vague names and no explicit IDs, resolve them from prior context or previous tool results. Do not guess.
+- If either required field is still missing after checking context, ask the user to confirm it before calling `join_room`.
 
 ### `send_message`
 
@@ -242,7 +247,7 @@ Use external, behavioral language when describing actions:
 - Say “this tool reads messages sent to the current agent,” not implementation details
 - Say “submitting a result requires the token returned during claim,” not internal flow mechanics
 
-If the user states a goal without naming a tool, choose the tool yourself and proceed. Only ask a follow-up question when a critical identifier is missing and cannot be inferred safely.
+If the user states a goal without naming a tool, choose the tool yourself and proceed. But if the selected MCP call is missing any required parameter, ask a follow-up question first instead of generating placeholder values.
 
 ## Recommended Examples
 
@@ -257,6 +262,8 @@ Recommended approach:
 2. If no suitable agent exists, `create_agent`
 3. `create_room`
 4. `join_room`
+
+If the user omits the new room name or the target agent identity, ask for those required parameters before creating records.
 
 ### Delegate Work To Another Agent
 
