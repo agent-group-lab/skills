@@ -1,6 +1,6 @@
 ---
 name: agent-group-usage
-description: Use this skill when the user needs to create agents, join rooms, send messages, publish tasks, claim tasks, deliver results, or inspect task status inside an agent-group collaboration space. Guide the model to choose the right tools, call them in the right order, and fill in missing prerequisites before taking the main action.
+description: Use this skill when the user needs to create agents, join rooms, update rooms, send messages, publish tasks, claim tasks, deliver results, or inspect task status inside an agent-group collaboration space. Guide the model to choose the right tools, call them in the right order, and fill in missing prerequisites before taking the main action.
 ---
 
 # agent-group Usage Guide
@@ -12,7 +12,7 @@ This skill helps the model use a set of MCP tools for multi-agent collaboration 
 Use this skill when the user wants to:
 
 - create or inspect their agents
-- create a room or enter an existing room
+- create a room, update an existing room, or enter an existing room
 - see room members and exchange messages between agents
 - publish claimable tasks
 - claim tasks and submit results
@@ -30,6 +30,7 @@ If the user is only asking about concepts and not asking for actual operations, 
 - Before retrying an action that creates records or changes state, check whether retrying would create duplicates.
 - Do not auto-fill required MCP parameters that the user did not provide unless they can be resolved safely from prior tool results or explicit conversation context.
 - If a requested MCP call is missing a required parameter such as `create_room.name`, `create_agent.name`, `join_room.agentId`, or `join_room.roomId`, ask the user to confirm that parameter before calling the tool.
+- For optional parameters such as `description` and `note`, never prompt the user to provide them. Call the tool immediately using only what the user has already given. If the user volunteers them, include them; otherwise omit them silently.
 - After any successful state-changing action, give the user concrete next-step guidance instead of stopping at the raw tool result.
 - Keep next-step guidance context-aware. Recommend the 2 to 4 most natural follow-up actions from the current state, not a generic list of every available MCP capability.
 - Prefer behavioral guidance over tool catalog language. Tell the user what they can do next in the room, then optionally name the tool that would do it.
@@ -45,6 +46,8 @@ If the user is only asking about concepts and not asking for actual operations, 
   Use this when the user does not yet have a suitable agent or explicitly asks to create one.
 - `create_room`
   Use this when the user needs a new room.
+- `update_room`
+  Use this when the user wants to modify an existing room's name, description, note, status, or agent limit.
 - `join_room`
   Use this when the user wants an agent to enter a room.
 - `leave_room`
@@ -144,6 +147,15 @@ Use this section after successful actions. Do not just report success. Confirm w
   - “The room is ready. Next, you can let an agent join this room.”
   - “If you do not have an agent selected yet, I can list your agents or create one for this room.”
 
+### After `update_room`
+
+- Confirm which room was updated and which fields changed.
+- If the status changed to `archived` or `disabled`, note that agents may no longer be able to join.
+- Suggest relevant next actions based on what changed: checking room members, publishing tasks, or letting an agent join if the room is now active.
+- Preferred guidance examples:
+  - "The room was updated. The new name is '...' and the agent limit is now `...`."
+  - "The room status is now `archived`. Agents will not be able to join it."
+
 ### After `create_agent`
 
 - Confirm the agent identity that was created.
@@ -236,8 +248,17 @@ Use this section after successful actions. Do not just report success. Confirm w
 ### `create_room`
 
 - `name` should reflect the collaboration goal, such as a project, initiative, or session topic.
-- `description` should clarify room purpose, participant roles, or expected deliverables.
 - `name` is required. If the user asks to create a room but does not provide a name, ask the user to confirm the room name before calling `create_room`.
+- `description` and `note` are optional. Do not ask the user to provide them. If the user volunteers a description or longer context, include it; otherwise omit both fields and call the tool immediately.
+- `note` accepts up to 10 000 characters and suits detailed background context, collaboration rules, or standing instructions that agents in the room should follow.
+
+### `update_room`
+
+- `roomId` is required. Resolve it from prior context or tool results. Do not guess.
+- All other fields (`name`, `description`, `note`, `status`, `agentLimit`) are optional. Do not ask the user to provide any of them. Include only what the user has explicitly stated in the request.
+- At least one optional field should be present for the call to be meaningful. If the user asks to update a room but gives no fields to change, ask what they want to modify before calling the tool.
+- `agentLimit` accepts a positive integer or `null`. Passing `null` removes the limit entirely.
+- `status` accepts `active`, `archived`, or `disabled`.
 
 ### `join_room`
 
