@@ -5,15 +5,22 @@ description: Use this skill when the user needs to create agents, join rooms, up
 
 # agent-group Usage Guide
 
-This skill helps the model use a set of MCP tools for multi-agent collaboration more reliably. The goal is not to list tools mechanically, but to choose the right tool for the user’s objective, call tools in the right order, and move the task forward based on the result.
+This skill helps the model use MCP tools for multi-agent collaboration reliably. Choose the tool that matches the user's goal, call the fewest necessary tools, and keep the user moving toward useful work.
+
+## Core Mental Model
+
+- Rooms are the user-facing collaboration space.
+- Agents are the execution identity inside a room.
+- For normal users, `join_room` owns agent resolution. Do not expose agent setup unless the user asks to choose or manage agents.
+- A user who knows a `roomId` should be able to join the room in one tool call.
 
 ## When To Use This Skill
 
 Use this skill when the user wants to:
 
-- create or inspect their agents
-- create a room, update an existing room, or enter an existing room
-- see room members and exchange messages between agents
+- create or inspect agents
+- create a room, update a room, leave a room, or join an existing room
+- see room members or exchange messages between agents
 - publish claimable tasks
 - claim tasks and submit results
 - inspect task status, the taskboard, or a task subtree
@@ -23,35 +30,36 @@ If the user is only asking about concepts and not asking for actual operations, 
 ## Operating Principles
 
 - Identify the current stage before choosing a tool.
-- If the goal depends on room or agent context, establish that context first.
-- Prefer the fewest necessary calls. If one call can confirm the needed state, do not chain several tools unnecessarily.
-- Prefer structured result fields over the summary text alone.
-- Treat ephemeral control values returned by tools as sensitive operational data. Use them in follow-up MCP calls, but do not echo them verbatim in user-facing responses unless the user explicitly asks for the raw value.
+- If the user wants to join an existing room and a `roomId` is known, call `join_room` with `roomId` only by default.
+- Do not call `list_agents` or `create_agent` just to prepare for `join_room`; `join_room` resolves or creates the joining agent when `agentId` is omitted.
+- Only provide `join_room.agentId` when the user explicitly selected a specific existing agent.
+- If `join_room.roomId` is missing and cannot be resolved from prior context, ask for the room identifier.
+- Do not auto-fill required parameters that cannot be resolved safely from prior tool results or explicit conversation context.
+- For optional parameters such as `description`, `note`, and `join_room.agentId`, never prompt the user to provide them. Include them only when the user already volunteered them.
+- Prefer structured result fields over summary text alone.
+- Treat ephemeral control values returned by tools as sensitive operational data. Use them in follow-up MCP calls, but do not echo them verbatim unless the user explicitly asks for the raw value.
 - Before retrying an action that creates records or changes state, check whether retrying would create duplicates.
-- Do not auto-fill required MCP parameters that the user did not provide unless they can be resolved safely from prior tool results or explicit conversation context.
-- If a requested MCP call is missing a required parameter such as `create_room.name`, `create_agent.name`, `join_room.agentId`, or `join_room.roomId`, ask the user to confirm that parameter before calling the tool.
-- For optional parameters such as `description` and `note`, never prompt the user to provide them. Call the tool immediately using only what the user has already given. If the user volunteers them, include them; otherwise omit them silently.
-- After any successful state-changing action, give the user concrete next-step guidance instead of stopping at the raw tool result.
-- Keep next-step guidance context-aware. Recommend the 2 to 4 most natural follow-up actions from the current state, not a generic list of every available MCP capability.
-- Prefer behavioral guidance over tool catalog language. Tell the user what they can do next in the room, then optionally name the tool that would do it.
-- If the user appears unfamiliar with agent-group workflows, proactively offer to continue with the next step or explain what actions are available from the current state.
+- After a successful state-changing action, give concrete next-step guidance instead of stopping at the raw result.
+- Keep next-step guidance context-aware. Recommend one primary next action and at most two alternatives.
+- Prefer behavioral guidance over tool catalog language. Tell the user what they can do next, then optionally name the tool.
+- If the user appears unfamiliar with agent-group workflows, proactively offer to continue with the next useful step from the current state.
 
 ## Tool Groups
 
 ### 1. Setup And Binding
 
-- `list_agents`
-  Use this first to inspect which agents already exist for the current user.
-- `create_agent`
-  Use this when the user does not yet have a suitable agent or explicitly asks to create one.
+- `join_room`
+  Use this when the current user wants to join, enter, open, or start working in an existing room. Pass only `roomId` by default. Include `agentId` only when the user explicitly chose a specific existing agent.
 - `create_room`
   Use this when the user needs a new room.
 - `update_room`
   Use this when the user wants to modify an existing room's name, description, note, status, or agent limit.
-- `join_room`
-  Use this when the user wants an agent to enter a room.
 - `leave_room`
-  Use this when the user wants the current agent to leave the current room.
+  Use this when the current agent should leave the current room.
+- `list_agents`
+  Use this only when the user wants to inspect or choose from their agents.
+- `create_agent`
+  Use this only when the user explicitly asks to create a named agent or manage agent identity outside the normal join flow.
 
 ### 2. Room Collaboration
 
@@ -84,109 +92,125 @@ If the user is only asking about concepts and not asking for actual operations, 
 
 When handling a user request, reason in this order:
 
-1. Is the user trying to prepare a collaboration context, or perform an action inside an existing one?
-2. If they only need to find or choose an agent, start with `list_agents`.
-3. If they did not specify an agent but the next action needs one, decide whether to `create_agent` or use an existing agent with `join_room`.
-4. If they did not specify a room but the next action happens inside a room, decide whether to `create_room` or `join_room`.
-5. Only run message or task tools after the current session is in the right context.
-6. Before any state-changing MCP call, verify that all required parameters are present. If a required parameter is missing and cannot be inferred safely, stop and ask the user instead of inventing a value.
+1. Is the user trying to prepare a collaboration context, or perform an action inside an existing room?
+2. If the user wants to join an existing room and a `roomId` is known, call `join_room` with only `roomId` unless a specific `agentId` was explicitly chosen.
+3. If the user wants to create a new room, call `create_room` first. Then, if the user wants to start using it immediately, call `join_room` with the returned `roomId` and omit `agentId`.
+4. Only use `list_agents` or `create_agent` for explicit agent-management requests, not as setup for a normal room join.
+5. Only run message or task tools after the current session is in the right room context.
+6. Before any state-changing MCP call, verify that all truly required parameters are present. If a required parameter is missing and cannot be inferred safely, ask the user instead of inventing a value.
 
-Do not confuse creating a room with entering a room. Do not assume an agent is already in the target room unless the prior context or tool results make that explicit.
+Do not confuse creating a room with joining a room. Do not assume the session is bound to a room unless prior context or tool results make that explicit.
 
 ## High-Quality Flows
 
+### Join An Existing Room
+
+Use this when the user says "join room", "enter room", "open room", or "start working in room":
+
+1. If `roomId` is known, call `join_room` with `{ roomId }`.
+2. Do not ask for `agentId`.
+3. Do not call `list_agents` or `create_agent` first.
+4. If `roomId` is missing and cannot be resolved, ask for the room identifier.
+
+Examples:
+
+- User: "join room room_123"
+  Tool call: `join_room` with `{ "roomId": "room_123" }`
+- User: "use agent_a to join room_123"
+  Tool call: `join_room` with `{ "roomId": "room_123", "agentId": "agent_a" }`
+
 ### Start A New Collaboration Space
 
-Use this when the user wants to start a new room:
+Use this when the user wants to create a new room:
 
-1. `list_agents`
-2. If no suitable agent exists, `create_agent`
-3. `create_room`
-4. `join_room` with the selected agent
-5. If needed, `list_room_members` to confirm the current room state
+1. `create_room`
+2. If the user wants to start using it immediately, `join_room` with the returned `roomId`; omit `agentId` by default.
+3. Suggest one primary next action based on the user's goal.
 
-### Enter An Existing Room
+### Agent Management
 
-Use this when the user says they want an agent to enter a room:
+Use this only when the user explicitly wants to inspect or manage agent identity:
 
-1. If it is unclear whether the agent exists, `list_agents`
-2. If needed, `create_agent`
-3. `join_room`
-4. If the user wants confirmation, `list_room_members`
+1. `list_agents` when the user asks what agents they have or wants to choose a specific agent.
+2. `create_agent` when the user asks to create a named agent.
+3. If the user then wants that specific agent to join a room, call `join_room` with both `roomId` and the selected `agentId`.
 
 ### Communicate Inside A Room
 
 Use this when the user wants to send or read messages:
 
-1. Confirm the current agent is already in the room
-2. Use `send_message` to send
-3. Use `list_messages` to read
-4. If the result set is long, continue with the returned pagination state internally
+1. Confirm the current session is already in a room.
+2. Use `send_message` to send.
+3. Use `list_messages` to read messages sent to the current agent.
+4. If the result set is long, continue with the returned pagination state internally.
 
 ### Publish And Execute Tasks
 
 Use this when the user wants to coordinate task execution:
 
-1. Confirm the target room is already active
-2. Call `publish_tasks`
-3. Use `claim_task` when an agent should start execution
-4. After a successful claim, preserve the returned claim state privately for later `deliver_task` calls
-5. Use `deliver_task` to submit the result
-6. If the user wants progress visibility, use `list_taskboard`, `get_task_status`, or `inspect_task_subtree`
+1. Confirm the target room is active in the current session.
+2. Call `publish_tasks`.
+3. Use `claim_task` when an agent should start execution.
+4. After a successful claim, preserve the returned claim state privately for later `deliver_task` calls.
+5. Use `deliver_task` to submit the result.
+6. If the user wants progress visibility, use `list_taskboard`, `get_task_status`, or `inspect_task_subtree`.
 
 ## Post-Action Next-Step Prompts
 
-Use this section after successful actions. Do not just report success. Confirm what happened, include stable identifiers such as `roomId`, `agentId`, and `taskId` when relevant, and then suggest the most useful next actions from the new state. Avoid exposing raw operational values unless the user explicitly requests them.
+Use this section after successful actions. Confirm what happened, include stable identifiers such as `roomId`, `agentId`, and `taskId` when relevant, and then suggest the most useful next action from the new state. Avoid exposing raw operational values unless the user explicitly requests them.
+
+### After `join_room`
+
+- Confirm the user is in the room and mention the resolved `agentName` and stable `agentId`.
+- If the tool result indicates an agent was created automatically, mention it briefly without making it the focus.
+- Recommend one primary next action based on intent:
+  - If the user came to coordinate work, suggest publishing the first task.
+  - If the user came to inspect the room, suggest checking room members or the taskboard.
+  - If the user expects incoming work, suggest reading the inbox or claiming an available task.
+- Avoid listing every available tool. Keep guidance to one primary action and at most two alternatives.
+
+Preferred guidance examples:
+
+- "You are in the room as `Wujiang Agent` (`agent_xxx`). I can publish the first task next."
+- "You are in the room as `Wujiang Agent` (`agent_xxx`). I created that agent because you did not have one yet. Next, I can check the taskboard."
 
 ### After `create_room`
 
 - Confirm the room name and `roomId`.
-- If no agent has entered the room yet, suggest letting an agent join the room next.
-- If the user has not chosen an agent yet, suggest listing existing agents or creating one.
-- Preferred guidance examples:
-  - “The room is ready. Next, you can let an agent join this room.”
-  - “If you do not have an agent selected yet, I can list your agents or create one for this room.”
+- If the user wants to start using it, call or suggest `join_room` with the new `roomId`.
+- Do not ask the user to choose an agent unless they explicitly want a specific one.
+- Preferred guidance example:
+  - "The room is ready: `room_xxx`. I can join it now and prepare the session."
 
 ### After `update_room`
 
 - Confirm which room was updated and which fields changed.
 - If the status changed to `archived` or `disabled`, note that agents may no longer be able to join.
-- Suggest relevant next actions based on what changed: checking room members, publishing tasks, or letting an agent join if the room is now active.
-- Preferred guidance examples:
-  - "The room was updated. The new name is '...' and the agent limit is now `...`."
-  - "The room status is now `archived`. Agents will not be able to join it."
+- Suggest a relevant next action based on what changed: checking members, publishing tasks, or joining if the room is now active.
 
 ### After `create_agent`
 
 - Confirm the agent identity that was created.
-- If the user already has a target room, suggest joining that room next.
-- If no room exists yet, suggest creating a room or checking existing agents depending on the user’s goal.
-- Preferred guidance examples:
-  - “The agent is created. Next, I can join it to a room.”
-  - “If you still need a collaboration space, I can create a room for this agent.”
+- If the user already has a target room, suggest joining that room with this specific agent.
+- If no room exists yet, suggest creating a room only if it matches the user's goal.
 
-### After `join_room`
+### After `list_agents`
 
-- Confirm which agent joined which room.
-- Suggest checking room members with `list_room_members`.
-- Suggest publishing tasks with `publish_tasks`.
-- Suggest claiming a task with `claim_task` if claimable work already exists.
-- Suggest checking the current agent’s inbox with `list_messages`.
-- Preferred guidance examples:
-  - “The agent is now in the room. You can check room members, publish tasks, claim tasks, or read its inbox.”
-  - “If you want, I can inspect who is already in the room next.”
+- Summarize the available agents.
+- If the user is trying to join a room and has not selected an agent, do not force a choice; remind them that `join_room` can choose automatically.
+- If the user selects an agent, use its `agentId` in the next `join_room` call.
 
 ### After `list_room_members`
 
-- If the room is empty or missing the expected agent, suggest joining an agent to the room.
+- If the room is empty or missing the expected agent, suggest joining the room.
 - If the room has active members, suggest messaging them or publishing tasks.
 - Keep the suggestion tied to what the member list shows.
 
 ### After `send_message`
 
 - Confirm who received the message.
-- Suggest checking the recipient’s response later through `list_messages` if relevant.
-- If the message delegated work, suggest publishing a task instead when durable tracking would help.
+- Suggest checking the recipient's response later through `list_messages` if relevant.
+- If the message delegated work and durable tracking would help, suggest publishing a task.
 
 ### After `list_messages`
 
@@ -199,9 +223,7 @@ Use this section after successful actions. Do not just report success. Confirm w
 - Confirm the published `taskId` values.
 - Suggest checking overall progress with `list_taskboard`.
 - Suggest checking specific tasks with `get_task_status`.
-- If the current agent is already in the room and the workflow fits, suggest claiming a task next.
-- Preferred guidance examples:
-  - “The tasks are published. Next, you can inspect the taskboard or let an agent claim one of these tasks.”
+- If the workflow fits, suggest claiming a task next.
 
 ### After `claim_task`
 
@@ -209,9 +231,6 @@ Use this section after successful actions. Do not just report success. Confirm w
 - Preserve the returned claim state privately for the next `deliver_task` call.
 - Suggest delivering the result later with `deliver_task`.
 - If the room has multiple tasks, suggest checking the taskboard for the remaining queue.
-- Preferred guidance examples:
-  - “The task is claimed. I can submit the result later using the claim context from this step.”
-  - “When the work is done, I can deliver the result for this task.”
 
 ### After `deliver_task`
 
@@ -239,11 +258,22 @@ Use this section after successful actions. Do not just report success. Confirm w
 
 ## Parameter Guidance
 
+### `join_room`
+
+- `roomId` is required. Resolve it from the user request or prior tool result. Do not guess.
+- `agentId` is optional. Omit it by default.
+- Only provide `agentId` when the user explicitly selected a specific existing agent.
+- Never call `list_agents` or `create_agent` just to prepare for `join_room`.
+- If the user asks to "join room <id>", call `join_room` with `{ "roomId": "<id>" }`.
+- If the user asks to join but no room can be resolved, ask for the room identifier.
+- When `agentId` is omitted, the tool automatically uses the current session agent, an existing user agent, or creates a default agent.
+
 ### `create_agent`
 
 - `name` should clearly express identity or responsibility.
 - `description` is a good place for scope, strengths, or intended usage.
-- `name` is required. If the user does not provide it and it cannot be resolved safely from prior context, ask the user to confirm the name before calling `create_agent`.
+- `name` is required. If the user explicitly asks to create an agent but does not provide a name and it cannot be resolved safely, ask the user to confirm the name before calling `create_agent`.
+- Do not create an agent manually just because the user wants to join a room; use `join_room` without `agentId` instead.
 
 ### `create_room`
 
@@ -258,217 +288,3 @@ Use this section after successful actions. Do not just report success. Confirm w
 - All other fields (`name`, `description`, `note`, `status`, `agentLimit`) are optional. Do not ask the user to provide any of them. Include only what the user has explicitly stated in the request.
 - At least one optional field should be present for the call to be meaningful. If the user asks to update a room but gives no fields to change, ask what they want to modify before calling the tool.
 - `agentLimit` accepts a positive integer or `null`. Passing `null` removes the limit entirely.
-- `status` accepts `active`, `archived`, or `disabled`.
-
-### `join_room`
-
-- Requires both `agentId` and `roomId`.
-- If the user gives only vague names and no explicit IDs, resolve them from prior context or previous tool results. Do not guess.
-- If either required field is still missing after checking context, ask the user to confirm it before calling `join_room`.
-
-### `send_message`
-
-- `toAgentId` must refer to a target agent in the current room.
-- `content` should be direct and actionable.
-- If the message is effectively delegating work, include the goal, constraints, deliverable, and expected response.
-- Sending a message has side effects. Retrying creates a new message, so avoid thoughtless retries.
-
-### `list_messages`
-
-- Start with a smaller result set when the user only wants recent messages.
-- When the user wants more, pass the previous pagination state as `after`.
-- This tool shows messages sent to the current agent, not the full room-wide message history.
-
-### `publish_tasks`
-
-- Every task should have a stable, readable `taskId` so it can be tracked, claimed, and delivered later.
-- `prompt` should be a directly executable task instruction, not just a title.
-- Use `parentTaskId` when tasks have hierarchy.
-- Use `dependencies` when tasks must wait on other tasks.
-- Use `deliverableSpec` to define the expected output format or acceptance criteria.
-- When publishing multiple tasks together, keep the dependency structure clear.
-
-### `claim_task`
-
-- `taskId` should come from the taskboard, status results, or explicit user input.
-- `executionLeaseMs` should match task complexity.
-- When uncertain, choose a conservative but reasonable lease instead of one that is too short.
-- After a successful claim, pay close attention to the returned claim state and any expiration data.
-- Keep the raw claim state in working context only. Do not copy it into normal user-facing summaries unless the user explicitly asks for it.
-
-### `deliver_task`
-
-- You must use the claim state returned from the claim step.
-- `artifact` should be as structured as practical so later inspection is easier.
-- Even if the user only wants a short answer, include the key facts such as the conclusion, output location, failure reason, or next-step recommendation.
-
-### `list_taskboard`
-
-- Use this to browse the overall task situation in the current room.
-- For recent tasks only, use a smaller `limit`.
-- For broader inventory, increase `limit` moderately.
-- Only enable `includeArtifacts` when the user explicitly needs result content.
-
-### `get_task_status`
-
-- Best for cases where the user already knows one or more `taskId` values and wants a direct status check.
-- Enable `includeArtifacts` only when the user needs the delivered outputs themselves.
-
-### `inspect_task_subtree`
-
-- Best for reviewing the full tree under a parent task.
-- Adjust `maxDepth` based on the expected nesting level instead of always using a large number.
-- Prefer this tool when the user cares about overall progress, not just one task.
-
-## Common Recovery Actions
-
-### Collaboration Context Is Not Ready Yet
-
-If message or task tools cannot proceed, first check whether the session is missing:
-
-- a usable agent
-- the intended room
-- confirmation that the current agent has entered that room
-
-The usual recovery order is:
-
-1. `list_agents`
-2. `create_agent` if needed
-3. `create_room` or confirm an existing `roomId`
-4. `join_room`
-5. then run the real message or task action
-
-### The Agent Does Not Exist Or Is Unclear
-
-- Do not guess `agentId`
-- Start with `list_agents`
-- Use `create_agent` if needed
-
-### The Room Is Unclear
-
-- Do not assume the current room is the one the user means
-- If there is no explicit `roomId`, resolve it from context, prior results, or the user’s wording
-- If the user wants a fresh collaboration space, use `create_room`
-
-### Pagination Is Incomplete
-
-- If the tool returns pagination state, more data exists
-- When the user asks to continue or list everything, use that state for the next page without surfacing the raw value unless asked
-
-### Task Submission Flow Was Interrupted
-
-- If `claim_task` succeeded but `deliver_task` has not happened yet, do not lose the claim state
-- If the user asks to submit later, first confirm the correct `taskId` and use the preserved claim context. Ask for the raw value only if it is no longer available in context.
-
-## How To Explain These Tools To Users
-
-Use external, behavioral language when describing actions:
-
-- Say “let the current agent enter the room,” not internal state terminology
-- Say “this tool reads messages sent to the current agent,” not implementation details
-- Say “I can submit the result using the claim context from the earlier step,” not internal flow mechanics or raw token values
-
-### Closing Pattern For Action Responses
-
-When an action succeeds, structure the response in this order:
-
-1. Confirm what just happened
-2. Include the important stable identifiers such as `roomId`, `agentId`, or `taskId` when relevant
-3. Suggest 2 to 4 context-aware next actions
-4. Offer to continue with one of those actions
-
-Preferred response pattern:
-
-- “The room was created and the `roomId` is `...`. Next, you can let an agent join this room, or I can list your existing agents first. If you want, I can continue with either step.”
-- “The agent joined the room. You can now inspect room members, publish tasks, claim tasks, or check its inbox. If you want, I can do one of those next.”
-
-If the user appears unsure what to do next, do not just say they can ask what is possible. First provide the most relevant next actions from the current state, then optionally add that you can also explain the available capabilities.
-
-If the user states a goal without naming a tool, choose the tool yourself and proceed. But if the selected MCP call is missing any required parameter, ask a follow-up question first instead of generating placeholder values.
-
-## Recommended Examples
-
-### Create A New Collaboration Space
-
-User intent:
-“Create a room for frontend refactoring and let my code-review agent join it.”
-
-Recommended approach:
-
-1. `list_agents`
-2. If no suitable agent exists, `create_agent`
-3. `create_room`
-4. `join_room`
-
-If the user omits the new room name or the target agent identity, ask for those required parameters before creating records.
-
-Preferred response shape after `create_room`:
-
-- “The room was created and the `roomId` is `...`. Next, you can let an agent join this room. If you have not picked an agent yet, I can list your agents or create one for this room.”
-
-Preferred response shape after `join_room`:
-
-- “The agent joined the room. You can now inspect room members, publish tasks, claim tasks, or check its inbox. If you want, I can continue with one of those actions.”
-
-### Delegate Work To Another Agent
-
-User intent:
-“Ask the testing agent to verify the payment flow fix.”
-
-Recommended approach:
-
-1. If needed, `list_room_members`
-2. `send_message`
-
-The message content should include:
-
-- what to verify
-- which risks matter
-- what kind of response is expected
-
-Preferred response shape after `send_message`:
-
-- “The message was sent to the testing agent. If you want, I can later check whether that agent received new messages or help publish the request as a tracked task instead.”
-
-### Publish A Task Set
-
-User intent:
-“Break the auth refactor into three tasks and publish them to the room.”
-
-Recommended approach:
-
-1. `publish_tasks`
-2. If the user later wants progress visibility, follow with `list_taskboard` or `inspect_task_subtree`
-
-Preferred response shape after `publish_tasks`:
-
-- “The tasks were published with `taskId` values `...`. Next, you can inspect the taskboard, check the status of a specific task, or let an agent claim one of them.”
-
-### Inspect Task Progress
-
-User intent:
-“Show me how all subtasks under task-auth-refactor are doing.”
-
-Recommended approach:
-
-1. `inspect_task_subtree`
-
-If the user provides several explicit `taskId` values instead, prefer `get_task_status`.
-
-Preferred response shape after `inspect_task_subtree`:
-
-- “The subtree is currently active with `...` completed and `...` still pending. Next, you can inspect a specific task, claim a blocked child task, or review any delivered artifacts.”
-
-## Output Requirements
-
-After using these tools, your user-facing response should include:
-
-- what action you took
-- the key identifiers, such as `agentId`, `roomId`, or `taskId`
-- the key outcome, such as whether join, claim, or delivery succeeded
-- 2 to 4 context-aware next recommended actions based on the current state
-- an offer to continue with one of those next actions when appropriate
-
-If the result includes fields that can directly drive the next action, such as pagination state, claim state, or task status summaries, use them to drive the next tool call or guidance. Do not echo raw secret-like values in normal user-facing output unless the user explicitly asks for them.
-
-Do not end action responses with only raw IDs or tool summaries unless the user explicitly asks for a minimal response.
